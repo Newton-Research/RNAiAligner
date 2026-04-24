@@ -5,8 +5,8 @@ test -e ssshtest || wget -q https://raw.githubusercontent.com/ryanlayer/ssshtest
 . ssshtest
 set -e
 
-cd seqkit; go build; cd ..;
-app=./seqkit/seqkit
+cd seqkit; go build -o rnaialigner; cd ..;
+app=./seqkit/rnaialigner
 
 set +e
 
@@ -308,6 +308,39 @@ assert_equal $(cat $STDOUT_FILE | seqkit seq -s) ""
 # ------------------------------------------------------------
 #                       locate
 # ------------------------------------------------------------
+
+locate_seq() {
+    echo -e ">seq\nAACG\nACCG\nAGCG\nATCG"
+}
+fun() {
+    locate_seq | $app locate -P -d -p ANCG
+}
+run locate_degenerate_exact fun
+assert_equal 4 $(sed 1d $STDOUT_FILE | wc -l | sed 's/ //g')
+
+fun() {
+    echo -e ">seq\nATCG" | $app locate -P -d -m 1 --degenerate-mismatch-mode count -p ARCG
+}
+run locate_degenerate_mismatch_counted fun
+assert_in_stdout "ATCG"
+
+fun() {
+    echo -e ">seq\nTTCG" | $app locate -P -d -m 1 --degenerate-mismatch-mode count -p ARCG
+}
+run locate_degenerate_mismatch_count_mode_budget fun
+assert_equal 0 $(sed 1d $STDOUT_FILE | wc -l | sed 's/ //g')
+
+fun() {
+    echo -e ">seq\nTTCG" | $app locate -P -d -m 1 --degenerate-mismatch-mode ignore -p ARCG
+}
+run locate_degenerate_mismatch_ignore_mode fun
+assert_in_stdout "TTCG"
+
+fun() {
+    echo -e ">seq\nATG" | $app locate -P -m 1 -p ACG
+}
+run locate_nondegenerate_mismatch_regression fun
+assert_in_stdout "ATG"
 
 
 # ------------------------------------------------------------

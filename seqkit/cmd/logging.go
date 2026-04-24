@@ -22,4 +22,4 @@ package cmd
 
 import "github.com/shenwei356/go-logging"
 
-var log = logging.MustGetLogger("seqkit")
+var log = logging.MustGetLogger("rnaialigner")

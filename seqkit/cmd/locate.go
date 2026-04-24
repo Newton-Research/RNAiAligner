@@ -26,6 +26,7 @@ import (
 	"io"
 	"regexp"
 	"runtime"
+	"sort"
 	"sync"
 
 	"github.com/shenwei356/bio/seq"
@@ -87,6 +88,7 @@ Attention:
 		pattern := getFlagStringSlice(cmd, "pattern")
 		patternFile := getFlagString(cmd, "pattern-file")
 		degenerate := getFlagBool(cmd, "degenerate")
+		degenerateMismatchMode := getFlagString(cmd, "degenerate-mismatch-mode")
 		useRegexp := getFlagBool(cmd, "use-regexp")
 		useFMI := getFlagBool(cmd, "use-fmi")
 		ignoreCase := getFlagBool(cmd, "ignore-case")
@@ -103,6 +105,10 @@ Attention:
 
 		if config.Alphabet == seq.Protein {
 			onlyPositiveStrand = true
+		}
+
+		if degenerateMismatchMode != "count" && degenerateMismatchMode != "ignore" {
+			checkError(fmt.Errorf("invalid value for --degenerate-mismatch-mode: %s. available values: count, ignore", degenerateMismatchMode))
 		}
 
 		if len(pattern) == 0 && patternFile == "" {
@@ -126,9 +132,6 @@ Attention:
 		}
 
 		if mismatches > 0 {
-			if degenerate {
-				checkError(fmt.Errorf("flag -d (--degenerate) not allowed when giving flag -m (--max-mismatch)"))
-			}
 			if useRegexp {
 				checkError(fmt.Errorf("flag -r (--use-regexp) not allowed when giving flag -m (--max-mismatch)"))
 			}
@@ -183,6 +186,9 @@ Attention:
 					} else {
 						checkError(fmt.Errorf("illegal DNA/RNA/Protein sequence: %s", record.Name))
 					}
+					if ignoreCase {
+						patterns[name] = bytes.ToLower(record.Seq.Seq)
+					}
 				} else {
 					if degenerate || useRegexp {
 						if ignoreCase {
@@ -231,6 +237,9 @@ Attention:
 						seq.Protein.IsValid(patterns[p]) == nil { // legal sequence
 					} else {
 						checkError(fmt.Errorf("illegal DNA/RNA/Protein sequence: %s", p))
+					}
+					if ignoreCase {
+						patterns[p] = bytes.ToLower(patterns[p])
 					}
 				} else {
 					if degenerate || useRegexp {
@@ -401,7 +410,7 @@ Attention:
 							_done <- 1
 						}()
 
-						if !(degenerate || useRegexp) && ignoreCase {
+						if !(useRegexp) && ignoreCase {
 							record.Seq.Seq = bytes.ToLower(record.Seq.Seq)
 						}
 
@@ -421,7 +430,13 @@ Attention:
 							_wg.Add(1)
 
 							go func(pName string, pSeq []byte) {
-								loc, err := sfmi.Locate(pSeq, mismatches)
+								var loc []int
+								var err error
+								if degenerate {
+									loc, err = locateDegenerateFM(sfmi, pSeq, mismatches, degenerateMismatchMode, alphabet)
+								} else {
+									loc, err = sfmi.Locate(pSeq, mismatches)
+								}
 								if err != nil {
 									checkError(fmt.Errorf("fail to search pattern '%s' on seq '%s': %s", pName, record.Name, err))
 								}
@@ -507,7 +522,13 @@ Attention:
 							_wg2.Add(1)
 
 							go func(pName string, pSeq []byte) {
-								loc, err := sfmi.Locate(pSeq, mismatches)
+								var loc []int
+								var err error
+								if degenerate {
+									loc, err = locateDegenerateFM(sfmi, pSeq, mismatches, degenerateMismatchMode, alphabet)
+								} else {
+									loc, err = sfmi.Locate(pSeq, mismatches)
+								}
 								if err != nil {
 									checkError(fmt.Errorf("fail to search pattern '%s' on seq '%s': %s", pName, record.Name, err))
 								}
@@ -629,7 +650,7 @@ Attention:
 					checkAlphabet = false
 				}
 
-				if !(degenerate || useRegexp) && ignoreCase {
+				if !(useRegexp) && ignoreCase {
 					record.Seq.Seq = bytes.ToLower(record.Seq.Seq)
 				}
 
@@ -646,7 +667,11 @@ Attention:
 					}
 
 					for pName, pSeq = range patterns {
-						loc, err = sfmi.Locate(pSeq, mismatches)
+						if degenerate {
+							loc, err = locateDegenerateFM(sfmi, pSeq, mismatches, degenerateMismatchMode, alphabet)
+						} else {
+							loc, err = sfmi.Locate(pSeq, mismatches)
+						}
 						if err != nil {
 							checkError(fmt.Errorf("fail to search pattern '%s' on seq '%s': %s", pName, record.Name, err))
 						}
@@ -714,7 +739,11 @@ Attention:
 						checkError(fmt.Errorf("fail to build FMIndex for reverse complement sequence: %s", record.Name))
 					}
 					for pName, pSeq = range patterns {
-						loc, err = sfmi.Locate(pSeq, mismatches)
+						if degenerate {
+							loc, err = locateDegenerateFM(sfmi, pSeq, mismatches, degenerateMismatchMode, alphabet)
+						} else {
+							loc, err = sfmi.Locate(pSeq, mismatches)
+						}
 						if err != nil {
 							checkError(fmt.Errorf("fail to search pattern '%s' on seq '%s': %s", pName, record.Name, err))
 						}
@@ -989,6 +1018,7 @@ func init() {
 	locateCmd.Flags().BoolP("degenerate", "d", false, "pattern/motif contains degenerate base")
 	locateCmd.Flags().BoolP("use-regexp", "r", false, "patterns/motifs are regular expression")
 	locateCmd.Flags().BoolP("use-fmi", "F", false, "use FM-index for much faster search of lots of sequence patterns")
+	locateCmd.Flags().StringP("degenerate-mismatch-mode", "", "count", "how degenerate positions consume mismatch budget with -d and -m: count or ignore")
 	locateCmd.Flags().BoolP("ignore-case", "i", false, "ignore case")
 	locateCmd.Flags().BoolP("only-positive-strand", "P", false, "only search on positive strand")
 	locateCmd.Flags().BoolP("non-greedy", "G", false, "non-greedy mode, faster but may miss motifs overlapping with others")
@@ -1012,4 +1042,145 @@ func prune(s []byte, n int) []byte {
 	}
 
 	return []byte(string(s[:n]) + "...")
+}
+
+type degenerateFMMatch struct {
+	query      []byte
+	start, end int
+	mismatches int
+}
+
+type degenerateFMStack []degenerateFMMatch
+
+func (s degenerateFMStack) empty() bool {
+	return len(s) == 0
+}
+
+func (s *degenerateFMStack) put(i degenerateFMMatch) {
+	*s = append(*s, i)
+}
+
+func (s *degenerateFMStack) pop() degenerateFMMatch {
+	d := (*s)[len(*s)-1]
+	*s = (*s)[:len(*s)-1]
+	return d
+}
+
+func locateDegenerateFM(sfmi *fmi.FMIndex, query []byte, mismatches int, mode string, alphabet *seq.Alphabet) ([]int, error) {
+	if len(query) == 0 {
+		return []int{}, nil
+	}
+
+	locationsMap := make(map[int]struct{})
+	var matches degenerateFMStack
+	matches.put(degenerateFMMatch{query: query, start: 0, end: len(sfmi.BWT) - 1, mismatches: mismatches})
+
+	for !matches.empty() {
+		match := matches.pop()
+		remainingQuery := match.query[:len(match.query)-1]
+		patternBase := match.query[len(match.query)-1]
+
+		for _, textBase := range sfmi.Alphabet {
+			if sfmi.CountOfLetters[textBase] == 0 {
+				continue
+			}
+
+			cost := degenerateMismatchCost(patternBase, textBase, mode, alphabet)
+			if cost > match.mismatches {
+				continue
+			}
+
+			var start int
+			if match.start == 0 {
+				start = sfmi.C[textBase]
+			} else {
+				start = sfmi.C[textBase] + int((*sfmi.Occ[textBase])[match.start-1])
+			}
+			end := sfmi.C[textBase] + int((*sfmi.Occ[textBase])[match.end]-1)
+			if start > end {
+				continue
+			}
+
+			if len(remainingQuery) == 0 {
+				for _, i := range sfmi.SuffixArray[start : end+1] {
+					locationsMap[i] = struct{}{}
+				}
+			} else {
+				matches.put(degenerateFMMatch{
+					query:      remainingQuery,
+					start:      start,
+					end:        end,
+					mismatches: match.mismatches - cost,
+				})
+			}
+		}
+	}
+
+	locations := make([]int, 0, len(locationsMap))
+	for loc := range locationsMap {
+		locations = append(locations, loc)
+	}
+	sort.Ints(locations)
+
+	return locations, nil
+}
+
+func degenerateMismatchCost(patternBase, textBase byte, mode string, alphabet *seq.Alphabet) int {
+	if degenerateBaseMatches(patternBase, textBase, alphabet) {
+		return 0
+	}
+	if mode == "ignore" && isDegenerateWildcardBase(patternBase, alphabet) {
+		return 0
+	}
+	return 1
+}
+
+func degenerateBaseMatches(patternBase, textBase byte, alphabet *seq.Alphabet) bool {
+	if alphabet == seq.Protein {
+		if bases, ok := seq.DegenerateBaseMapProt[patternBase]; ok {
+			return degenerateRegexpBaseMatches(bases, textBase)
+		}
+		return patternBase == textBase
+	}
+
+	if bases, ok := seq.DegenerateBaseMapNucl2[patternBase]; ok {
+		return bytes.IndexByte([]byte(bases), textBase) >= 0
+	}
+	return patternBase == textBase
+}
+
+func isDegenerateWildcardBase(patternBase byte, alphabet *seq.Alphabet) bool {
+	if alphabet == seq.Protein {
+		if bases, ok := seq.DegenerateBaseMapProt[patternBase]; ok {
+			return bases != string([]byte{patternBase})
+		}
+		return false
+	}
+
+	if bases, ok := seq.DegenerateBaseMapNucl2[patternBase]; ok {
+		return len(bases) > 1
+	}
+	return false
+}
+
+func degenerateRegexpBaseMatches(bases string, textBase byte) bool {
+	if len(bases) == 1 {
+		return bases[0] == textBase
+	}
+	if len(bases) >= 2 && bases[0] == '[' && bases[len(bases)-1] == ']' {
+		class := bases[1 : len(bases)-1]
+		for i := 0; i < len(class); i++ {
+			if i+2 < len(class) && class[i+1] == '-' {
+				if textBase >= class[i] && textBase <= class[i+2] {
+					return true
+				}
+				i += 2
+				continue
+			}
+			if class[i] == textBase {
+				return true
+			}
+		}
+	}
+	return false
 }

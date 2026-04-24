@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// VERSION of seqkit
+// VERSION of rnaialigner
 const VERSION = "2.14.0"
 
 // versionCmd represents the version command
@@ -39,7 +39,7 @@ var versionCmd = &cobra.Command{
 
 `,
 	Run: func(cmd *cobra.Command, args []string) {
-		app := "seqkit"
+		app := "rnaialigner"
 		fmt.Printf("%s v%s\n", app, VERSION)
 
 		if !getFlagBool(cmd, "check-update") {

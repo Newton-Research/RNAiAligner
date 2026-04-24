@@ -26,6 +26,8 @@ _testmain.go
 doc/site/*
 *.Rhistory
 seqkit/seqkit*
+seqkit/rnaialigner*
+dist/
 TODO.md
 benchmark/.Rhistory
 seqkit/binaries*
