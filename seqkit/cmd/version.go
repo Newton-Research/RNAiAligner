@@ -29,7 +29,7 @@ import (
 )
 
 // VERSION of rnaialigner
-const VERSION = "2.14.0"
+const VERSION = "2.13.0"
 
 // versionCmd represents the version command
 var versionCmd = &cobra.Command{
